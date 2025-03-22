@@ -52,25 +52,22 @@ class MelExtractDataset(Dataset):
         mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=self.sample_rate, n_fft=self.win_length, hop_length=self.win_length)(waveform) #(channels, mel_bins, time_steps)
         annotations = self.load_annotations(annotation_path)  #(num_notes, 4)
 
-        print(mel_spec.shape)
+        print('mel spec ',mel_spec.shape)
         print(annotations.shape)
         print(waveform.shape)
 
-        time_step = self.hop_length / self.sample_rate #time steps in seconds
-        num_frames = int(waveform.shape[1] / time_step) #number of frames in the audio
-
-        print(num_frames)
-
-        grid = torch.zeros(annotations.shape[0]*num_frames) #initialize grid 
+        grid = torch.zeros(annotations.shape[0]*mel_spec.shape[2]) #initialize grid 
         print(grid.shape)
 
         labels = torch.zeros((len(grid), 128), dtype=torch.float32) #initialize matrix to hold 0 and 1s
 
+        print(labels.shape)
+
         # Mark melody notes in the time grid
         for note in annotations:
-            start_idx = torch.searchsorted(grid, note.start)
-            end_idx = torch.searchsorted(grid, note.end)
-            pitch = note.pitch
+            start_idx = torch.searchsorted(grid, int(note[0]))
+            end_idx = torch.searchsorted(grid, int(note[1]))
+            pitch = int(note[2])
             labels[start_idx:end_idx, pitch] = 1.0
         
         return mel_spec, labels
