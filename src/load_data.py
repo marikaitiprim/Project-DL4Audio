@@ -26,8 +26,8 @@ class MelExtractDataset(Dataset):
         self.audio_paths, self.annotation_paths = audio_paths, annotation_paths
         self.hop_length = 512
         self.win_length = 1024
-        self.sample_rate = 16000
-        self.mel_bins = 128
+        self.sample_rate = 22050
+        self.max_length = int(self.sample_rate * 9)  # 10 seconds for each audio file
 
     def load_annotations(self, annotation_path):
         midi_data = pretty_midi.PrettyMIDI(annotation_path) #load midi file
@@ -49,20 +49,26 @@ class MelExtractDataset(Dataset):
 
         waveform, sr = torchaudio.load(audio_path) #original sr = 44100
 
-        waveform = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.sample_rate)(waveform) #resample to 16000 Hz - (channels, time_steps)
+        waveform = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.sample_rate)(waveform) #resample to 22050 Hz - (channels, time_steps)
+        waveform = waveform[:, :self.max_length]    #cut the audio to 10 seconds
         mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=self.sample_rate, n_fft=self.win_length, hop_length=self.hop_length)(waveform) #(channels, mel_bins, num_frames)
         annotations = self.load_annotations(annotation_path)  #(num_notes, 4)
 
-        # print('mel spec ',mel_spec.shape)
+        annotations = annotations[annotations[:, 0] < 9] # Filter annotations to only include notes that start within the first 10 seconds
+
+        # print(audio_path)
+        print('mel spec ',mel_spec.shape)
         # print(annotations.shape)
         # print(waveform.shape)
 
-        labels = torch.zeros((mel_spec.shape[2], mel_spec.shape[1]), dtype=torch.float32)
+        labels = torch.zeros((mel_spec.shape[1], mel_spec.shape[2]), dtype=torch.float32)
         for annotation in annotations:
             start_time, end_time, pitch = annotation
             start_idx = int(start_time * mel_spec.shape[2])
             end_idx = int(end_time * mel_spec.shape[2])
             labels[start_idx:end_idx, int(pitch)] = 1.0 #mark the notes of the melody in the time grid
+
+        print(labels.shape)
 
         # grid = torch.zeros(waveform.shape[1]*mel_spec.shape[2]) #initialize grid 
         # print(grid.shape)
@@ -78,7 +84,7 @@ class MelExtractDataset(Dataset):
         #     pitch = int(note[2])
         #     labels[start_idx:end_idx, pitch] = 1.0  #-> killed
         
-        return mel_spec, annotations
+        return mel_spec, labels
 
 
 def load_data(audio_dir, annotation_dir, batch_size=1):

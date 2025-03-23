@@ -4,9 +4,10 @@ import load_data
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import numpy as np
+import scipy.signal
 
 class CNNMidi(nn.Module):       #temporary cnn + lstm model
-    def __init__(self, num_classes=64):
+    def __init__(self, num_classes=388):
         super(CNNMidi, self).__init__()
         
         self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, padding=1)
@@ -16,6 +17,7 @@ class CNNMidi(nn.Module):       #temporary cnn + lstm model
         self.bn1 = nn.BatchNorm2d(32)
         self.bn2 = nn.BatchNorm2d(64)
         self.bn3 = nn.BatchNorm2d(128)
+        self.fc1 = nn.Linear(128 * 12 * 8, 512)
         self.fc2 = nn.Linear(512, num_classes)
         self.relu = nn.ReLU()
         self.lstm = nn.LSTM(input_size=128 * 12 * 8, hidden_size=256, num_layers=1, batch_first=True, bidirectional=True)
@@ -32,11 +34,54 @@ class CNNMidi(nn.Module):       #temporary cnn + lstm model
         
         x = x.view(x.size(0), -1) #flatten
 
-        x, _ = self.lstm(x)
+        # x, _ = self.lstm(x)
+
+        x = self.relu(self.fc1(x))
 
         x = self.fc2(x)
         
         return x
+
+def peak_picking(batch_outputs, device):        #function for post-processing. Peak picking for converting the probabilities of the output of the model into binary representation
+    batch_outputs_cpu = batch_outputs.cpu().numpy()
+    batch_binary_outputs = np.zeros(batch_outputs_cpu.shape)  # Initialize with all zeros
+
+    for frame_set_id in range(batch_outputs_cpu.shape[0]): #for every frame set in the batch
+        detected_peaks_indices, _ = scipy.signal.find_peaks(batch_outputs_cpu[frame_set_id, :], distance=30) #post-processing peak picking for extracting the beats of the set
+        batch_binary_outputs[frame_set_id, detected_peaks_indices] = 1  # Set beats to 1 for the specific set
+
+    return torch.tensor(batch_binary_outputs, dtype=torch.float32).to(device)
+    
+def calculate_precision(true_positives, false_positives):
+    precision = 0.
+    if true_positives + false_positives != 0:
+        precision = true_positives / (true_positives + false_positives)
+    return precision
+
+def calculate_recall(true_positives, false_negatives):
+    recall = 0.
+    if true_positives + false_negatives != 0:
+        recall = true_positives / (true_positives + false_negatives)
+    return recall
+
+def calculate_f1(precision, recall):
+    f1_accuracy = 0.
+    if precision + recall != 0:
+        f1_accuracy = 2*precision*recall / (precision + recall)
+    return f1_accuracy
+
+def pos_weight_loss(data_loader):
+    num_positive = 0
+    num_negative = 0
+
+    for _, batch_labels in data_loader:  # Extract only labels and divide 
+        num_positive += (batch_labels == 1.0).sum().item()
+        num_negative += (batch_labels == 0.0).sum().item()
+
+    if num_positive > 0:  
+        return torch.tensor([num_negative / num_positive], dtype=torch.float32).to(device)
+    else:
+        return torch.tensor([1.0], dtype=torch.float32).to(device)  # Default to 1 if no positives
 
 def evaluate(model, data_loader, criterion):
     model.eval()
@@ -53,25 +98,26 @@ def evaluate(model, data_loader, criterion):
             batch_inputs = batch_inputs.to(device)
             batch_labels = batch_labels.to(device)
 
-            batch_size, num_setofframes, num_channels, mel_bins, time_step = batch_inputs.shape
-            batch_inputs = batch_inputs.reshape(batch_size*num_setofframes, num_channels, mel_bins, time_step) #reshape to (batch_size*num_setofframes, num_channels, mel_bins, time_step)
-            batch_labels = batch_labels.reshape(batch_size*num_setofframes, time_step) #reshape to (batch_size*num_setofframes, time_step)
+            # batch_size, num_setofframes, num_channels, mel_bins, time_step = batch_inputs.shape
+            # batch_inputs = batch_inputs.reshape(batch_size*num_setofframes, num_channels, mel_bins, time_step) #reshape to (batch_size*num_setofframes, num_channels, mel_bins, time_step)
+            # batch_labels = batch_labels.reshape(batch_size*num_setofframes, time_step) #reshape to (batch_size*num_setofframes, time_step)
 
-            batch_outputs = model(batch_inputs) 
+            batch_outputs = model(batch_inputs)
+
+            batch_binary_outputs = peak_picking(batch_outputs=batch_outputs, device=device)    #post-processing
         
-            # true_positives += ((batch_binary_outputs == batch_labels) & (batch_binary_outputs == 1)).sum().item() #All beat predictions - TP
-            # false_positives += ((batch_binary_outputs != batch_labels) & (batch_binary_outputs == 1)).sum().item() #FP
-            # false_negatives += ((batch_binary_outputs != batch_labels) & (batch_binary_outputs == 0)).sum().item() #FN
+            true_positives += ((batch_binary_outputs == batch_labels) & (batch_binary_outputs == 1)).sum().item() #All beat predictions - TP
+            false_positives += ((batch_binary_outputs != batch_labels) & (batch_binary_outputs == 1)).sum().item() #FP
+            false_negatives += ((batch_binary_outputs != batch_labels) & (batch_binary_outputs == 0)).sum().item() #FN
             epoch_loss += criterion(batch_outputs, batch_labels).item()
            
     epoch_loss /= num_batches
 
-    # precision = calculate_precision(true_positives=true_positives, false_positives=false_positives)
-    # recall = calculate_recall(true_positives=true_positives, false_negatives=false_negatives)
-    # f1_accuracy = calculate_f1(precision=precision, recall=recall)
+    precision = calculate_precision(true_positives=true_positives, false_positives=false_positives)
+    recall = calculate_recall(true_positives=true_positives, false_negatives=false_negatives)
+    f1_accuracy = calculate_f1(precision=precision, recall=recall)
 
     return epoch_loss, precision, recall, f1_accuracy
-
 
 def train(model, train_loader, valid_loader, criterion, optimizer, num_epochs, saved_model, evaluate_every_n_epochs=1):
     model.train()
@@ -81,8 +127,7 @@ def train(model, train_loader, valid_loader, criterion, optimizer, num_epochs, s
     valid_losses = []
     valid_accuracies = []
 
-    # val_criterion =  nn.BCEWithLogitsLoss(pos_weight=pos_weight_loss(valid_loader)) #different pos_weight for validation set
-    val_criterion = nn.CrossEntropyLoss() #check if this is the right loss function
+    val_criterion =  nn.BCEWithLogitsLoss(pos_weight=pos_weight_loss(valid_loader)) #different pos_weight for validation set
 
     for epoch in range(num_epochs):
         epoch_loss = 0
@@ -91,9 +136,9 @@ def train(model, train_loader, valid_loader, criterion, optimizer, num_epochs, s
             batch_inputs = batch_inputs.to(device)
             batch_labels = batch_labels.to(device)
 
-            batch_size, num_setofframes, num_channels, mel_bins, time_step = batch_inputs.shape
-            batch_inputs = batch_inputs.reshape(batch_size*num_setofframes, num_channels, mel_bins, time_step) #reshape to (batch_size*num_setofframes, num_channels, mel_bins, time_step)
-            batch_labels = batch_labels.reshape(batch_size*num_setofframes, time_step) #reshape to (batch_size*num_setofframes, time_step)
+            # batch_size, num_channels, mel_bins, time_step = batch_inputs.shape
+            # batch_inputs = batch_inputs.reshape(batch_size*num_setofframes, num_channels, mel_bins, time_step) #reshape to (batch_size*num_setofframes, num_channels, mel_bins, time_step)
+            # batch_labels = batch_labels.reshape(batch_size*num_setofframes, time_step) #reshape to (batch_size*num_setofframes, time_step)
             
             # forward + backward + optimize
             outputs = model(batch_inputs)        #squeeze removes the channel dimension
@@ -148,17 +193,16 @@ if __name__ == '__main__':
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
     print("Using ", device , ":")
 
-    audio_dir = "/Users/marikaitiprimenta/Desktop/Beat-Tracking---Music-Informatics/BallroomData"  #change to the path of your audio data
-    annotation_dir = "/Users/marikaitiprimenta/Desktop/Beat-Tracking---Music-Informatics/BallroomAnnotations-master" #change to the path of your annotation data
+    audio_dir = "/Users/marikaitiprimenta/Desktop/Deep Learning in Music/project/Project-DL4Audio/Orchset/audio/mono"  #change to the path of your audio data
+    annotation_dir = "/Users/marikaitiprimenta/Desktop/Deep Learning in Music/project/Project-DL4Audio/Orchset/midi" #change to the path of your annotation data
 
-    train_loader, test_loader = load_data.load_data(audio_dir, annotation_dir, batch_size=32) 
+    train_loader, test_loader = load_data.load_data(audio_dir, annotation_dir, batch_size=1) 
 
     model = CNNMidi().to(device)
-    # criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_loss(train_loader))  
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_loss(train_loader))  
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)  
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)  # Reduce LR every 10 epochs
 
 
-    train_losses, valid_losses, valid_accuracies = train(model, train_loader, test_loader, criterion, optimizer, num_epochs=50, saved_model='best_model.pth')
+    train_losses, valid_losses, valid_accuracies = train(model, train_loader, test_loader, criterion, optimizer, num_epochs=2, saved_model='best_model.pth')
     plot_metrics(train_losses, valid_losses, valid_accuracies)
