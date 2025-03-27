@@ -1,9 +1,11 @@
 import os
 import torch 
+import librosa
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset
 import torchaudio
 import pretty_midi
+import numpy as np
 
 def create_dataset(audio_dir, annotation_dir):      #pair paths from audio and annotations
     audio_paths = []
@@ -24,10 +26,24 @@ class MelExtractDataset(Dataset):
 
     def __init__(self, audio_paths, annotation_paths):
         self.audio_paths, self.annotation_paths = audio_paths, annotation_paths
-        self.hop_length = 512
-        self.win_length = 1024
+        self.hop_length =512
+        self.win_length = 2048
         self.sample_rate = 22050
-        self.max_length = int(self.sample_rate * 9)  # 10 seconds for each audio file
+        self.mel_bins = 128
+        self.max_length = int(self.sample_rate * 9)  # 9 seconds for each audio file
+
+
+    def mel_spectrogram(self, audio_path):
+
+        waveform, sr = torchaudio.load(audio_path) #original sr = 44100
+        waveform = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.sample_rate)(waveform) #resample to 22050 Hz - (channels, time_steps)
+        waveform = waveform[:, :self.max_length]    #cut the audio to 9 seconds
+
+        mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=self.sample_rate, n_fft=self.win_length, hop_length=self.hop_length, n_mels=self.mel_bins)(waveform) #(channels, mel_bins, num_frames)
+        log_mel_spec = torchaudio.transforms.AmplitudeToDB()(mel_spec)
+            
+        return log_mel_spec #log_mel_spec[..., np.newaxis]
+
 
     def load_annotations(self, annotation_path):
         midi_data = pretty_midi.PrettyMIDI(annotation_path) #load midi file
@@ -37,8 +53,11 @@ class MelExtractDataset(Dataset):
             if not instrument.is_drum:
                 for note in instrument.notes: #extract the notes
                     midi_events.append([note.start,  note.end, note.pitch]) 
+        
+        annotations = torch.tensor(midi_events, dtype=torch.float32)
+        annotations = annotations[annotations[:, 0] < 9] # Filter annotations to only include notes that start within the first 9 seconds
 
-        return torch.tensor(midi_events, dtype=torch.float32)
+        return annotations
 
     def __len__(self):
         return len(self.audio_paths)
@@ -47,26 +66,25 @@ class MelExtractDataset(Dataset):
         audio_path = self.audio_paths[idx]
         annotation_path = self.annotation_paths[idx]
 
-        waveform, sr = torchaudio.load(audio_path) #original sr = 44100
-
-        waveform = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.sample_rate)(waveform) #resample to 22050 Hz - (channels, time_steps)
-        waveform = waveform[:, :self.max_length]    #cut the audio to 10 seconds
-        mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=self.sample_rate, n_fft=self.win_length, hop_length=self.hop_length)(waveform) #(channels, mel_bins, num_frames)
-        annotations = self.load_annotations(annotation_path)  #(num_notes, 4)
-
-        annotations = annotations[annotations[:, 0] < 9] # Filter annotations to only include notes that start within the first 10 seconds
+        mel_spec = self.mel_spectrogram(audio_path) 
+        annotations = self.load_annotations(annotation_path)  #(num_notes, 3)
 
         # print(audio_path)
         print('mel spec ',mel_spec.shape)
         # print(annotations.shape)
         # print(waveform.shape)
 
-        labels = torch.zeros((mel_spec.shape[1], mel_spec.shape[2]), dtype=torch.float32)
-        for annotation in annotations:
-            start_time, end_time, pitch = annotation
-            start_idx = int(start_time * mel_spec.shape[2])
-            end_idx = int(end_time * mel_spec.shape[2])
-            labels[start_idx:end_idx, int(pitch)] = 1.0 #mark the notes of the melody in the time grid
+        time_grid = librosa.times_like(mel_spec, sr=self.sample_rate, hop_length=self.hop_length)  # Generate time grid
+        freqs = librosa.fft_frequencies(sr=self.sample_rate, n_fft=self.win_length)  # Create frequency bins
+
+        labels = torch.zeros((len(freqs), len(time_grid)), dtype=torch.float32)
+
+        for note in annotations:
+            start_idx = np.searchsorted(time_grid, note[0])
+            end_idx = np.searchsorted(time_grid, note[1])
+            pitch_freq = librosa.midi_to_hz(note[2])
+            mask = (np.abs(freqs - pitch_freq) <= 0.5 * pitch_freq)
+            labels[mask, start_idx:end_idx] = 1.0
 
         print(labels.shape)
 
@@ -84,7 +102,7 @@ class MelExtractDataset(Dataset):
         #     pitch = int(note[2])
         #     labels[start_idx:end_idx, pitch] = 1.0  #-> killed
         
-        return mel_spec, labels
+        return torch.tensor(mel_spec, dtype=torch.float32), torch.tensor(labels, dtype=torch.float32)
 
 
 def load_data(audio_dir, annotation_dir, batch_size=1):
@@ -109,7 +127,7 @@ def load_data(audio_dir, annotation_dir, batch_size=1):
 
 
 # if __name__ == "__main__":
-#     audio_dir = "/Users/marikaitiprimenta/Desktop/Deep Learning in Music/project/Project-DL4Audio/Orchset/audio/mono"
-#     annotation_dir = "/Users/marikaitiprimenta/Desktop/Deep Learning in Music/project/Project-DL4Audio/Orchset/midi"
+#     audio_dir = "./Orchset/audio/stereo"
+#     annotation_dir = "./Orchset/midi"
 
 #     train, test = load_data(audio_dir, annotation_dir)
