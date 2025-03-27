@@ -6,8 +6,42 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy.signal
 
+# class CNNBeatTracker(nn.Module):
+#     def __init__(self, num_classes=64):
+#         super(CNNBeatTracker, self).__init__()
+        
+#         self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, padding=1)
+#         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+#         self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
+#         self.conv3 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, padding=1)
+#         self.bn1 = nn.BatchNorm2d(32)
+#         self.bn2 = nn.BatchNorm2d(64)
+#         self.bn3 = nn.BatchNorm2d(128)
+#         self.fc2 = nn.Linear(512, num_classes)
+#         self.relu = nn.ReLU()
+#         self.lstm = nn.LSTM(input_size=128 * 12 * 8, hidden_size=256, num_layers=1, batch_first=True, bidirectional=True)
+    
+#     def forward(self, x):
+#         x = self.relu(self.bn1(self.conv1(x)))
+#         x = self.pool(x)
+        
+#         x = self.relu(self.bn2(self.conv2(x)))
+#         x = self.pool(x)
+        
+#         x = self.relu(self.bn3(self.conv3(x)))
+#         x = self.pool(x)
+        
+#         x = x.view(x.size(0), -1) #flatten
+
+#         x, _ = self.lstm(x)
+
+#         x = self.fc2(x)
+        
+#         return x
+
+
 class CNNMidi(nn.Module):       #temporary cnn + lstm model
-    def __init__(self, num_classes=388):
+    def __init__(self, num_classes=128):
         super(CNNMidi, self).__init__()
         
         self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, padding=1)
@@ -17,10 +51,9 @@ class CNNMidi(nn.Module):       #temporary cnn + lstm model
         self.bn1 = nn.BatchNorm2d(32)
         self.bn2 = nn.BatchNorm2d(64)
         self.bn3 = nn.BatchNorm2d(128)
-        self.fc1 = nn.Linear(128 * 12 * 8, 512)
-        self.fc2 = nn.Linear(512, num_classes)
+        self.fc1 = nn.Linear(128 * 16 * 48, num_classes)
         self.relu = nn.ReLU()
-        self.lstm = nn.LSTM(input_size=128 * 12 * 8, hidden_size=256, num_layers=1, batch_first=True, bidirectional=True)
+        self.softmax = nn.Softmax(dim=1)
     
     def forward(self, x):
         x = self.relu(self.bn1(self.conv1(x)))
@@ -31,14 +64,13 @@ class CNNMidi(nn.Module):       #temporary cnn + lstm model
         
         x = self.relu(self.bn3(self.conv3(x)))
         x = self.pool(x)
+
+        print(x.shape)
         
         x = x.view(x.size(0), -1) #flatten
 
-        # x, _ = self.lstm(x)
-
-        x = self.relu(self.fc1(x))
-
-        x = self.fc2(x)
+        x = self.fc1(x)
+        x = self.softmax(x)
         
         return x
 
@@ -98,10 +130,6 @@ def evaluate(model, data_loader, criterion):
             batch_inputs = batch_inputs.to(device)
             batch_labels = batch_labels.to(device)
 
-            # batch_size, num_setofframes, num_channels, mel_bins, time_step = batch_inputs.shape
-            # batch_inputs = batch_inputs.reshape(batch_size*num_setofframes, num_channels, mel_bins, time_step) #reshape to (batch_size*num_setofframes, num_channels, mel_bins, time_step)
-            # batch_labels = batch_labels.reshape(batch_size*num_setofframes, time_step) #reshape to (batch_size*num_setofframes, time_step)
-
             batch_outputs = model(batch_inputs)
 
             batch_binary_outputs = peak_picking(batch_outputs=batch_outputs, device=device)    #post-processing
@@ -127,7 +155,8 @@ def train(model, train_loader, valid_loader, criterion, optimizer, num_epochs, s
     valid_losses = []
     valid_accuracies = []
 
-    val_criterion =  nn.BCEWithLogitsLoss(pos_weight=pos_weight_loss(valid_loader)) #different pos_weight for validation set
+    # val_criterion =  nn.BCEWithLogitsLoss(pos_weight=pos_weight_loss(valid_loader)) #different pos_weight for validation set
+    val_criterion = nn.CrossEntropyLoss()
 
     for epoch in range(num_epochs):
         epoch_loss = 0
@@ -136,13 +165,11 @@ def train(model, train_loader, valid_loader, criterion, optimizer, num_epochs, s
             batch_inputs = batch_inputs.to(device)
             batch_labels = batch_labels.to(device)
 
-            # batch_size, num_channels, mel_bins, time_step = batch_inputs.shape
-            # batch_inputs = batch_inputs.reshape(batch_size*num_setofframes, num_channels, mel_bins, time_step) #reshape to (batch_size*num_setofframes, num_channels, mel_bins, time_step)
-            # batch_labels = batch_labels.reshape(batch_size*num_setofframes, time_step) #reshape to (batch_size*num_setofframes, time_step)
+            # import pdb; pdb.set_trace()           
             
             # forward + backward + optimize
-            outputs = model(batch_inputs)        #squeeze removes the channel dimension
-            loss = criterion(outputs, batch_labels)
+            outputs = model(batch_inputs)        
+            loss = criterion(outputs, torch.argmax(batch_labels, dim=1))
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -193,13 +220,14 @@ if __name__ == '__main__':
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
     print("Using ", device , ":")
 
-    audio_dir = "/Users/marikaitiprimenta/Desktop/Deep Learning in Music/project/Project-DL4Audio/Orchset/audio/mono"  #change to the path of your audio data
-    annotation_dir = "/Users/marikaitiprimenta/Desktop/Deep Learning in Music/project/Project-DL4Audio/Orchset/midi" #change to the path of your annotation data
+    audio_dir = "./Orchset/audio/mono"  #change to the path of your audio data
+    annotation_dir = "./Orchset/midi" #change to the path of your annotation data
 
-    train_loader, test_loader = load_data.load_data(audio_dir, annotation_dir, batch_size=1) 
+    train_loader, test_loader = load_data.load_data(audio_dir, annotation_dir, batch_size=2) 
 
     model = CNNMidi().to(device)
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_loss(train_loader))  
+    # criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_loss(train_loader)) 
+    criterion = nn.CrossEntropyLoss() 
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)  
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)  # Reduce LR every 10 epochs
 

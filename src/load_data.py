@@ -70,37 +70,18 @@ class MelExtractDataset(Dataset):
         annotations = self.load_annotations(annotation_path)  #(num_notes, 3)
 
         # print(audio_path)
-        print('mel spec ',mel_spec.shape)
+        # print('mel spec ',mel_spec.shape)
         # print(annotations.shape)
         # print(waveform.shape)
 
         time_grid = librosa.times_like(mel_spec, sr=self.sample_rate, hop_length=self.hop_length)  # Generate time grid
-        freqs = librosa.fft_frequencies(sr=self.sample_rate, n_fft=self.win_length)  # Create frequency bins
-
-        labels = torch.zeros((len(freqs), len(time_grid)), dtype=torch.float32)
+        labels = torch.zeros((mel_spec.shape[1], len(time_grid)), dtype=torch.float32) 
 
         for note in annotations:
             start_idx = np.searchsorted(time_grid, note[0])
             end_idx = np.searchsorted(time_grid, note[1])
-            pitch_freq = librosa.midi_to_hz(note[2])
-            mask = (np.abs(freqs - pitch_freq) <= 0.5 * pitch_freq)
-            labels[mask, start_idx:end_idx] = 1.0
-
-        print(labels.shape)
-
-        # grid = torch.zeros(waveform.shape[1]*mel_spec.shape[2]) #initialize grid 
-        # print(grid.shape)
-
-        # labels = torch.zeros((len(grid), 128), dtype=torch.float32) #initialize matrix to hold 0 and 1s
-
-        # print(labels.shape)
-
-        # # Mark melody notes in the time grid
-        # for note in annotations:
-        #     start_idx = torch.searchsorted(grid, note[0])  # Get the nearest time step using searchsorted equivalent in torch
-        #     end_idx = torch.searchsorted(grid, note[1])
-        #     pitch = int(note[2])
-        #     labels[start_idx:end_idx, pitch] = 1.0  #-> killed
+            if 0 <= note[2] < mel_spec.shape[1]:
+                labels[int(note[2]), start_idx:end_idx] = 1.0
         
         return torch.tensor(mel_spec, dtype=torch.float32), torch.tensor(labels, dtype=torch.float32)
 
@@ -117,7 +98,8 @@ def load_data(audio_dir, annotation_dir, batch_size=1):
     train_dataset = MelExtractDataset(X_train, y_train)
     test_dataset = MelExtractDataset(X_test, y_test)
 
-    # print(train_dataset[0])
+    # import pdb; pdb.set_trace()
+    # print(train_dataset[0][1])
 
     # Create DataLoaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
