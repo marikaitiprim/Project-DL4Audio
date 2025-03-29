@@ -6,56 +6,33 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy.signal
 
-# class CNNBeatTracker(nn.Module):
-#     def __init__(self, num_classes=64):
-#         super(CNNBeatTracker, self).__init__()
-        
-#         self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, padding=1)
-#         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-#         self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
-#         self.conv3 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, padding=1)
-#         self.bn1 = nn.BatchNorm2d(32)
-#         self.bn2 = nn.BatchNorm2d(64)
-#         self.bn3 = nn.BatchNorm2d(128)
-#         self.fc2 = nn.Linear(512, num_classes)
-#         self.relu = nn.ReLU()
-#         self.lstm = nn.LSTM(input_size=128 * 12 * 8, hidden_size=256, num_layers=1, batch_first=True, bidirectional=True)
-    
-#     def forward(self, x):
-#         x = self.relu(self.bn1(self.conv1(x)))
-#         x = self.pool(x)
-        
-#         x = self.relu(self.bn2(self.conv2(x)))
-#         x = self.pool(x)
-        
-#         x = self.relu(self.bn3(self.conv3(x)))
-#         x = self.pool(x)
-        
-#         x = x.view(x.size(0), -1) #flatten
 
-#         x, _ = self.lstm(x)
-
-#         x = self.fc2(x)
-        
-#         return x
-
-
-class CNNMidi(nn.Module):       #temporary cnn + lstm model
-    def __init__(self, num_classes=128):
+class CNNMidi(nn.Module):
+    def __init__(self, num_classes=128, hidden_size=256, num_layers=2):
         super(CNNMidi, self).__init__()
         
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3, padding=1)
+        # Convolutional layers
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, padding=1)
+        self.relu = nn.ReLU()
         self.bn1 = nn.BatchNorm2d(32)
         self.bn2 = nn.BatchNorm2d(64)
         self.bn3 = nn.BatchNorm2d(128)
-        self.fc1 = nn.Linear(128 * 16 * 48, num_classes)
-        self.relu = nn.ReLU()
-        self.softmax = nn.Softmax(dim=1)
-    
+        
+        # Adaptive Pooling to reduce frequency dimension to 1
+        self.global_avg_pool = nn.AdaptiveAvgPool2d((1, None))
+        
+        # LSTM for temporal modeling
+        self.lstm = nn.LSTM(input_size=128, hidden_size=hidden_size, num_layers=num_layers, batch_first=True, bidirectional=True)
+        
+        # Fully connected layer to predict 128 MIDI classes
+        self.fc = nn.Linear(hidden_size * 2, num_classes) # Bidirectional LSTM has 2x hidden size
+
     def forward(self, x):
+        # Convolutional blocks
         x = self.relu(self.bn1(self.conv1(x)))
         x = self.pool(x)
         
@@ -64,13 +41,17 @@ class CNNMidi(nn.Module):       #temporary cnn + lstm model
         
         x = self.relu(self.bn3(self.conv3(x)))
         x = self.pool(x)
-
-        print(x.shape)
         
-        x = x.view(x.size(0), -1) #flatten
-
-        x = self.fc1(x)
-        x = self.softmax(x)
+        # Global average pooling over frequency axis
+        x = self.global_avg_pool(x)
+        x = x.squeeze(2)  # Shape: (Batch, 128, Time)
+        x = x.permute(0, 2, 1)  # Shape: (Batch, Time, 128)
+        
+        # LSTM for temporal context
+        x, _ = self.lstm(x)  # Output shape: (Batch, Time, Hidden*2)
+        
+        # Predict per time step
+        x = self.fc(x)  # Shape: (Batch, Time, 128)
         
         return x
 
@@ -102,19 +83,6 @@ def calculate_f1(precision, recall):
         f1_accuracy = 2*precision*recall / (precision + recall)
     return f1_accuracy
 
-def pos_weight_loss(data_loader):
-    num_positive = 0
-    num_negative = 0
-
-    for _, batch_labels in data_loader:  # Extract only labels and divide 
-        num_positive += (batch_labels == 1.0).sum().item()
-        num_negative += (batch_labels == 0.0).sum().item()
-
-    if num_positive > 0:  
-        return torch.tensor([num_negative / num_positive], dtype=torch.float32).to(device)
-    else:
-        return torch.tensor([1.0], dtype=torch.float32).to(device)  # Default to 1 if no positives
-
 def evaluate(model, data_loader, criterion):
     model.eval()
     num_batches = len(data_loader)
@@ -132,12 +100,12 @@ def evaluate(model, data_loader, criterion):
 
             batch_outputs = model(batch_inputs)
 
-            batch_binary_outputs = peak_picking(batch_outputs=batch_outputs, device=device)    #post-processing
+            batch_binary_outputs = torch.argmax(batch_outputs, dim=2)  # Shape: (Batch, Time) 
         
             true_positives += ((batch_binary_outputs == batch_labels) & (batch_binary_outputs == 1)).sum().item() #All beat predictions - TP
             false_positives += ((batch_binary_outputs != batch_labels) & (batch_binary_outputs == 1)).sum().item() #FP
             false_negatives += ((batch_binary_outputs != batch_labels) & (batch_binary_outputs == 0)).sum().item() #FN
-            epoch_loss += criterion(batch_outputs, batch_labels).item()
+            epoch_loss += criterion(batch_outputs.view(-1, 128), batch_labels.view(-1)).item()
            
     epoch_loss /= num_batches
 
@@ -155,9 +123,6 @@ def train(model, train_loader, valid_loader, criterion, optimizer, num_epochs, s
     valid_losses = []
     valid_accuracies = []
 
-    # val_criterion =  nn.BCEWithLogitsLoss(pos_weight=pos_weight_loss(valid_loader)) #different pos_weight for validation set
-    val_criterion = nn.CrossEntropyLoss()
-
     for epoch in range(num_epochs):
         epoch_loss = 0
 
@@ -166,10 +131,15 @@ def train(model, train_loader, valid_loader, criterion, optimizer, num_epochs, s
             batch_labels = batch_labels.to(device)
 
             # import pdb; pdb.set_trace()           
-            
-            # forward + backward + optimize
+
             outputs = model(batch_inputs)        
-            loss = criterion(outputs, torch.argmax(batch_labels, dim=1))
+
+            # Convert binary labels to class indices
+            labels_class = torch.argmax(outputs, dim=2)  # Shape: (Batch, Time) 
+
+            # Calculate loss
+            loss = criterion(outputs.view(-1, 128), labels_class.view(-1)) #softmax
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -187,7 +157,7 @@ def train(model, train_loader, valid_loader, criterion, optimizer, num_epochs, s
         
         # evaluate the network on the validation data
         if((epoch+1) % evaluate_every_n_epochs == 0):
-            valid_loss, valid_precision, valid_recall, valid_f1 = evaluate(model, valid_loader, val_criterion)
+            valid_loss, valid_precision, valid_recall, valid_f1 = evaluate(model, valid_loader, criterion)
             print(f'Validation loss: {valid_loss:.6f}')
             print(f'Validation Precision: {100*valid_precision:.2f}% | Recall: {100*valid_recall:.2f}% | F1: {100*valid_f1:.2f}%')
             valid_losses.append(valid_loss)
@@ -223,10 +193,9 @@ if __name__ == '__main__':
     audio_dir = "./Orchset/audio/mono"  #change to the path of your audio data
     annotation_dir = "./Orchset/midi" #change to the path of your annotation data
 
-    train_loader, test_loader = load_data.load_data(audio_dir, annotation_dir, batch_size=2) 
+    train_loader, test_loader = load_data.load_data(audio_dir, annotation_dir, batch_size=1) 
 
     model = CNNMidi().to(device)
-    # criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_loss(train_loader)) 
     criterion = nn.CrossEntropyLoss() 
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)  
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)  # Reduce LR every 10 epochs
