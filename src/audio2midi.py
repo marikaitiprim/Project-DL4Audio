@@ -4,7 +4,7 @@ import load_data
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import numpy as np
-import scipy.signal
+from sklearn.metrics import precision_score, recall_score, f1_score
 
 
 class CNNMidi(nn.Module):
@@ -34,13 +34,13 @@ class CNNMidi(nn.Module):
     def forward(self, x):
         # Convolutional blocks
         x = self.relu(self.bn1(self.conv1(x)))
-        x = self.pool(x)
+        # x = self.pool(x)
         
         x = self.relu(self.bn2(self.conv2(x)))
-        x = self.pool(x)
+        # x = self.pool(x)
         
         x = self.relu(self.bn3(self.conv3(x)))
-        x = self.pool(x)
+        # x = self.pool(x)
         
         # Global average pooling over frequency axis
         x = self.global_avg_pool(x)
@@ -52,36 +52,11 @@ class CNNMidi(nn.Module):
         
         # Predict per time step
         x = self.fc(x)  # Shape: (Batch, Time, 128)
+
+        x = x.permute(0, 2, 1) # Shape: (Batch, 128, Time)
         
         return x
-
-def peak_picking(batch_outputs, device):        #function for post-processing. Peak picking for converting the probabilities of the output of the model into binary representation
-    batch_outputs_cpu = batch_outputs.cpu().numpy()
-    batch_binary_outputs = np.zeros(batch_outputs_cpu.shape)  # Initialize with all zeros
-
-    for frame_set_id in range(batch_outputs_cpu.shape[0]): #for every frame set in the batch
-        detected_peaks_indices, _ = scipy.signal.find_peaks(batch_outputs_cpu[frame_set_id, :], distance=30) #post-processing peak picking for extracting the beats of the set
-        batch_binary_outputs[frame_set_id, detected_peaks_indices] = 1  # Set beats to 1 for the specific set
-
-    return torch.tensor(batch_binary_outputs, dtype=torch.float32).to(device)
     
-def calculate_precision(true_positives, false_positives):
-    precision = 0.
-    if true_positives + false_positives != 0:
-        precision = true_positives / (true_positives + false_positives)
-    return precision
-
-def calculate_recall(true_positives, false_negatives):
-    recall = 0.
-    if true_positives + false_negatives != 0:
-        recall = true_positives / (true_positives + false_negatives)
-    return recall
-
-def calculate_f1(precision, recall):
-    f1_accuracy = 0.
-    if precision + recall != 0:
-        f1_accuracy = 2*precision*recall / (precision + recall)
-    return f1_accuracy
 
 def evaluate(model, data_loader, criterion):
     model.eval()
@@ -90,30 +65,39 @@ def evaluate(model, data_loader, criterion):
     precision = 0.
     recall = 0.
     f1_accuracy = 0.
-    true_positives = 0.
-    false_positives = 0.
-    false_negatives = 0.
+
     with torch.no_grad():
+        all_predictions = []
+        all_labels = []
         for batch_inputs, batch_labels in data_loader:
             batch_inputs = batch_inputs.to(device)
             batch_labels = batch_labels.to(device)
 
             batch_outputs = model(batch_inputs)
 
-            batch_binary_outputs = torch.argmax(batch_outputs, dim=2)  # Shape: (Batch, Time) 
-        
-            true_positives += ((batch_binary_outputs == batch_labels) & (batch_binary_outputs == 1)).sum().item() #All beat predictions - TP
-            false_positives += ((batch_binary_outputs != batch_labels) & (batch_binary_outputs == 1)).sum().item() #FP
-            false_negatives += ((batch_binary_outputs != batch_labels) & (batch_binary_outputs == 0)).sum().item() #FN
-            epoch_loss += criterion(batch_outputs.view(-1, 128), batch_labels.view(-1)).item()
+            # Convert outputs and labels to integer class indices
+            batch_binary_indices = torch.argmax(batch_outputs, dim=1)  # Shape: (Batch, Time)
+            batch_labels_indices = batch_labels  # Assuming labels are already integer indices
+    
+            # Collect predictions and labels for metrics
+            all_predictions.append(batch_binary_indices.cpu().numpy().flatten())
+            all_labels.append(batch_labels.cpu().numpy().flatten())
+           
+            epoch_loss += criterion(batch_outputs, batch_labels).item()
+
+    # Concatenate all predictions and labels
+    all_predictions = np.concatenate(all_predictions, axis=0)  # Shape: (Total_Time,)
+    all_labels = np.concatenate(all_labels, axis=0)  # Shape: (Total_Time,)
+
+    # Calculate metrics
+    precision = precision_score(all_labels, all_predictions, average='macro')
+    recall = recall_score(all_labels, all_predictions, average='macro')
+    f1_accuracy = f1_score(all_labels, all_predictions, average='macro')
            
     epoch_loss /= num_batches
 
-    precision = calculate_precision(true_positives=true_positives, false_positives=false_positives)
-    recall = calculate_recall(true_positives=true_positives, false_negatives=false_negatives)
-    f1_accuracy = calculate_f1(precision=precision, recall=recall)
-
     return epoch_loss, precision, recall, f1_accuracy
+
 
 def train(model, train_loader, valid_loader, criterion, optimizer, num_epochs, saved_model, evaluate_every_n_epochs=1):
     model.train()
@@ -128,17 +112,10 @@ def train(model, train_loader, valid_loader, criterion, optimizer, num_epochs, s
 
         for batch_inputs, batch_labels in tqdm(train_loader):
             batch_inputs = batch_inputs.to(device)
-            batch_labels = batch_labels.to(device)
+            batch_labels = batch_labels.to(device)         
 
-            # import pdb; pdb.set_trace()           
-
-            outputs = model(batch_inputs)        
-
-            # Convert binary labels to class indices
-            labels_class = torch.argmax(outputs, dim=2)  # Shape: (Batch, Time) 
-
-            # Calculate loss
-            loss = criterion(outputs.view(-1, 128), labels_class.view(-1)) #softmax
+            outputs = model(batch_inputs)       
+            loss = criterion(outputs, batch_labels) #calculate loss
 
             optimizer.zero_grad()
             loss.backward()
@@ -200,6 +177,5 @@ if __name__ == '__main__':
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)  
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)  # Reduce LR every 10 epochs
 
-
-    train_losses, valid_losses, valid_accuracies = train(model, train_loader, test_loader, criterion, optimizer, num_epochs=2, saved_model='best_model.pth')
+    train_losses, valid_losses, valid_accuracies = train(model, train_loader, test_loader, criterion, optimizer, num_epochs=10, saved_model='best_model.pth')
     plot_metrics(train_losses, valid_losses, valid_accuracies)

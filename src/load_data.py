@@ -85,6 +85,8 @@ class MelExtractDataset(Dataset):
             start_idx = np.searchsorted(time_grid, note[0])
             end_idx = np.searchsorted(time_grid, note[1])
             labels[int(note[2]), start_idx:end_idx] = 1.0
+
+        labels = torch.argmax(labels, dim=0)  # Shape: (num_frames,)
         
         return mel_spec, labels
 
