@@ -30,30 +30,25 @@ class MelExtractDataset(Dataset):
         self.nfft = 2048
         self.win_length = 768
         self.sample_rate = 16000
-        # self.mel_bins = 128
         self.max_length = int(self.sample_rate * 9)  # 9 seconds for each audio file
 
 
     def spectrogram(self, audio_path):
         '''
-        Create the mel spectrogram for the audio file using torchaudio
+        Create the spectrogram for the audio file using torchaudio
         args: path to the audio file
-        return: mel spectrogram with shape (channels, mel_bins, num_frames)
+        return: spectrogram with shape (channels, freq_bins, num_frames)
         '''
 
         waveform, sr = torchaudio.load(audio_path) #original sr = 44100
         waveform = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.sample_rate)(waveform) #resample to 16000 Hz - (channels, time_steps)
         waveform = waveform[:, :self.max_length]    #cut the audio to 9 seconds
-
-        # mel_spec = torchaudio.transforms.MelSpectrogram(sample_rate=self.sample_rate, n_fft=self.win_length, hop_length=self.hop_length, n_mels=self.mel_bins, win_length=self.win_length)(waveform) 
         
         spec = torchaudio.transforms.Spectrogram(n_fft=self.nfft, hop_length=self.hop_length, win_length=self.win_length)(waveform)
 
         # Apply log compression (helps with dynamic range)
         spec = torch.log1p(spec)
         spec = (spec - spec.mean()) / (spec.std() + 1e-8) #normalization
-
-        # print(spec.shape) # (channels, mel_bins, num_frames)
         
         return spec 
 
@@ -85,11 +80,11 @@ class MelExtractDataset(Dataset):
         audio_path = self.audio_paths[idx]
         annotation_path = self.annotation_paths[idx]
 
-        mel_spec = self.spectrogram(audio_path) 
+        spec = self.spectrogram(audio_path).squeeze(0)
         annotations = self.load_annotations(annotation_path)  
 
-        time_grid = librosa.times_like(mel_spec, sr=self.sample_rate, hop_length=self.hop_length)  # Generate time grid
-        labels = torch.zeros((601, mel_spec.shape[2]), dtype=torch.float32) # (mel_bins, num_frames)
+        time_grid = librosa.times_like(spec, sr=self.sample_rate, hop_length=self.hop_length)  # Generate time grid
+        labels = torch.zeros((601, spec.shape[1]), dtype=torch.float32) # (freq_bins, num_frames)
 
         for note in annotations:
             start_idx = np.searchsorted(time_grid, note[0])
@@ -97,9 +92,9 @@ class MelExtractDataset(Dataset):
             if start_idx < len(time_grid) and end_idx <= len(time_grid):
                 labels[int(note[2]), start_idx:end_idx] = 1.0
 
-        labels = torch.argmax(labels, dim=1)  # Shape: (num_frames,)
+        labels = torch.argmax(labels, dim=0).long()  # Shape: (num_frames, time_steps)
         
-        return mel_spec, labels
+        return spec, labels
 
 
 def load_data(audio_dir, annotation_dir, batch_size=8):
@@ -119,10 +114,3 @@ def load_data(audio_dir, annotation_dir, batch_size=8):
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
     return train_loader, test_loader
-
-
-# if __name__ == "__main__":
-#     audio_dir = "./Orchset/audio/stereo"
-#     annotation_dir = "./Orchset/midi"
-
-#     train, test = load_data(audio_dir, annotation_dir)
