@@ -5,7 +5,6 @@ import pretty_midi
 import matplotlib.pyplot as plt
 import subprocess
 
-
 device = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
 
 def save_wav(midi_filepath, output_filepath='output.wav'):
