@@ -8,11 +8,11 @@ import subprocess
 
 device = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
 
-# def save_wav(midi_filepath, output_filepath='output.wav'):
-#     wav_filepath = output_filepath
-#     process = subprocess.Popen(f"fluidsynth soundfont.sf -g 1.0 -r 44100 --quiet --no-shell {midi_filepath} -T wav -F {wav_filepath} > /dev/null", shell=True)
-#     process.wait()
-#     return wav_filepath
+def save_wav(midi_filepath, output_filepath='output.wav'):
+    wav_filepath = output_filepath
+    process = subprocess.Popen(f"fluidsynth soundfont.sf -g 1.0 -r 44100 --quiet --no-shell {midi_filepath} -T wav -F {wav_filepath} > /dev/null", shell=True)
+    process.wait()
+    return wav_filepath
 
 def spectrogram(audio_path):
     '''
@@ -183,4 +183,4 @@ if __name__ == '__main__':
    # Visualize the MIDI
     plot_piano_roll(midi_file)
 
-    # save_wav(output_midi_path)
+    save_wav(output_midi_path)
