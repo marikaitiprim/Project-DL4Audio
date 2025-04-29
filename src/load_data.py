@@ -99,7 +99,7 @@ class ExtractDataset(Dataset):
 
 
 def load_data(audio_dir, annotation_dir, batch_size=8):
-    '''Create the dataset and dataloaders for training and tesing'''
+    '''Create the dataset and dataloaders for training and testing'''
 
     # Create dataset
     audio_paths, annotation_paths = create_dataset(audio_dir, annotation_dir)

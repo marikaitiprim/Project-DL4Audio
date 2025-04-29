@@ -30,14 +30,12 @@ class LSTMMidi(nn.Module):
         self.device = device
         self.projection = nn.Linear(hidden_size, proj_size)
         
-        # Using LSTM with projection as described in the paper
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers, 
                            batch_first=True, dropout=dropout)
         
         # Output layer (projection to pitch classes)
         self.fc = nn.Linear(proj_size, output_size)
         
-        # Initialize weights (as mentioned in paper: uniform [-0.05, 0.05])
         self._init_weights()
     
     def _init_weights(self):
@@ -46,11 +44,9 @@ class LSTMMidi(nn.Module):
             nn.init.uniform_(param, -0.05, 0.05)
     
     def forward(self, x):
-        # LSTM with projection layer
         output, _ = self.lstm(x)
         output = self.projection(output)
-        
-        # Apply fully connected layer
+
         y_pred = self.fc(output)
         
         return y_pred
@@ -87,14 +83,12 @@ def evaluate(model, val_loader, criterion):
             # RPA - Raw Pitch Accuracy
             correct_pitch += torch.sum((pred_pitch == batch_labels)).item()
             
-            # RCA - Raw Chroma Accuracy (ignoring octave errors)
-            # Convert to chroma (pitch class)
+            # RCA - Raw Chroma Accuracy (ignoring octave errors) 
             pred_chroma = pred_pitch % 12
             true_chroma = batch_labels % 12
             correct_chroma += torch.sum((pred_chroma == true_chroma) | ((pred_pitch == 0) & (batch_labels == 0))).item()
             
-            # MDA - Melody Detection Accuracy
-            # Voicing detection (melody or no melody)
+            # MDA - Melody Detection Accuracy - Voicing detection (melody or no melody)
             pred_voicing = (pred_pitch > 0)
             true_voicing = (batch_labels > 0)
             correct_voicing += torch.sum(pred_voicing == true_voicing).item()
@@ -135,7 +129,6 @@ def train(model, train_loader, valid_loader, criterion, optimizer, num_epochs, s
             loss.backward()
             optimizer.step()
 
-            # accumulate loss
             epoch_loss += loss.item()
 
         epoch_loss /= num_batches
