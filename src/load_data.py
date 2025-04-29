@@ -23,7 +23,7 @@ def create_dataset(audio_dir, annotation_dir):      #pair paths from audio and a
 
     return audio_paths, annotation_paths
 
-class MelExtractDataset(Dataset):
+class ExtractDataset(Dataset):
 
     def __init__(self, audio_paths, annotation_paths):
         self.audio_paths, self.annotation_paths = audio_paths, annotation_paths
@@ -99,6 +99,7 @@ class MelExtractDataset(Dataset):
 
 
 def load_data(audio_dir, annotation_dir, batch_size=8):
+    '''Create the dataset and dataloaders for training and tesing'''
 
     # Create dataset
     audio_paths, annotation_paths = create_dataset(audio_dir, annotation_dir)
@@ -107,8 +108,8 @@ def load_data(audio_dir, annotation_dir, batch_size=8):
     X_train, X_test, y_train, y_test = train_test_split(audio_paths, annotation_paths, test_size=0.2, random_state=42)
 
     # Create training and test datasets
-    train_dataset = MelExtractDataset(X_train, y_train)
-    test_dataset = MelExtractDataset(X_test, y_test)
+    train_dataset = ExtractDataset(X_train, y_train)
+    test_dataset = ExtractDataset(X_test, y_test)
 
     # Create DataLoaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)

@@ -4,14 +4,14 @@ import load_data
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-
 device = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
 
 class LSTMMidi(nn.Module):
     def __init__(self, input_size=1025, hidden_size=2000, proj_size=500, output_size=601, 
                  num_layers=1, dropout=0.2, device='cuda'): 
         """
-        LSTM-RNN for melody extraction with harmonic sum loss as described in the paper
+        LSTM-RNN for melody extraction with harmonic sum loss as described in the paper: MELODY EXTRACTION AND DETECTION
+        THROUGH LSTM-RNN WITH HARMONIC SUM LOSS (Park et al., 2017)
         
         Args:
             input_size: dimension of input features 
@@ -46,15 +46,6 @@ class LSTMMidi(nn.Module):
             nn.init.uniform_(param, -0.05, 0.05)
     
     def forward(self, x):
-        """
-        Forward pass
-        
-        Args:
-            x: input sequence [batch_size, seq_len, input_size]
-        
-        Returns:
-            y_pred: pitch prediction probabilities [batch_size, seq_len, output_size]
-        """
         # LSTM with projection layer
         output, _ = self.lstm(x)
         output = self.projection(output)
@@ -89,7 +80,7 @@ def evaluate(model, val_loader, criterion):
             
             epoch_loss += criterion(outputs, batch_labels).item()
             
-            pred_pitch = torch.argmax(outputs, dim=1)  # Shape: (Batch, freq_bins, Time_steps)
+            pred_pitch = torch.argmax(outputs, dim=1)  # Shape: (Batch, freq_bins, time_steps)
             
             total_frames += batch_labels.numel()
             
@@ -100,8 +91,7 @@ def evaluate(model, val_loader, criterion):
             # Convert to chroma (pitch class)
             pred_chroma = pred_pitch % 12
             true_chroma = batch_labels % 12
-            correct_chroma += torch.sum((pred_chroma == true_chroma) | 
-                                         ((pred_pitch == 0) & (batch_labels == 0))).item()
+            correct_chroma += torch.sum((pred_chroma == true_chroma) | ((pred_pitch == 0) & (batch_labels == 0))).item()
             
             # MDA - Melody Detection Accuracy
             # Voicing detection (melody or no melody)
@@ -119,6 +109,7 @@ def evaluate(model, val_loader, criterion):
 
 
 def train(model, train_loader, valid_loader, criterion, optimizer, num_epochs, saved_model, evaluate_every_n_epochs=1):
+    '''Training process for the LSTM-RNN model'''
     model.train()
     num_batches = len(train_loader)
     best_valid_acc = 0.0
@@ -138,7 +129,6 @@ def train(model, train_loader, valid_loader, criterion, optimizer, num_epochs, s
             outputs = model(batch_inputs)    
             outputs = outputs.permute(0, 2, 1) 
 
-            # print(outputs.shape)   
             loss = criterion(outputs, batch_labels) #calculate loss
 
             optimizer.zero_grad()
